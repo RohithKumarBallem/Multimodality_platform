@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mmwm"
+version = "0.1.0"
+description = "Orchestration layer for the multimodal world-model research platform"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+mmwm = "mmwm.cli:main"
+
+[tool.setuptools]
+packages = ["mmwm"]

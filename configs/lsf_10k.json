@@ -1,0 +1,10 @@
+{
+  "workdir": "/shared/mmwm/runs/world-model-10k",
+  "model": {"d_model": 256, "vocab": 1024, "text_len": 32, "image_patches": 64, "patch_dim": 192,
+            "audio_frames": 50, "audio_dim": 80, "action_dim": 16, "seed": 7},
+  "train": {"rounds": 3, "steps": 500, "batch_size": 64, "lr": 0.05, "threads": 4},
+  "cluster": {"backend": "lsf", "num_shards": 10000, "max_array_size": 1000,
+              "max_concurrent": 2000, "reduce_fan_in": 100, "min_shard_fraction": 0.98,
+              "queue": "normal", "cores": 4, "mem_mb": 4096, "walltime": "02:00"},
+  "eval": {"samples": 1024, "horizon": 8}
+}

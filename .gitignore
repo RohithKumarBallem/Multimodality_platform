@@ -1,0 +1,11 @@
+build/
+build-*/
+dist/
+runs/
+profile-out/
+bazel-*
+__pycache__/
+*.pyc
+.DS_Store
+*.ckpt
+*.ckpt.tmp.*

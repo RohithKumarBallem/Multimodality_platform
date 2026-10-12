@@ -1,0 +1,22 @@
+{
+  "config": {
+    "batch": 64,
+    "horizon": 8,
+    "d_model": 256,
+    "iters": 30,
+    "threads": 12
+  },
+  "reference": {
+    "p50_ms": 466.0723,
+    "p95_ms": 514.759,
+    "mean_ms": 461.5461
+  },
+  "optimized": {
+    "p50_ms": 15.3284,
+    "p95_ms": 18.7074,
+    "mean_ms": 15.7922
+  },
+  "speedup": 30.406,
+  "latency_reduction_pct": 96.71,
+  "max_abs_diff": 0
+}

@@ -1,0 +1,52 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+COPTS = [
+    "-Wall",
+    "-Wextra",
+    "-Wpedantic",
+    "-Wshadow",
+]
+
+cc_library(
+    name = "mmwm_core",
+    srcs = glob(
+        ["cpp/src/*.cc"],
+        exclude = ["cpp/src/c_api.cc"],
+    ),
+    hdrs = glob(["cpp/include/mmwm/*.h"]),
+    copts = COPTS,
+    includes = ["cpp/include"],
+    linkopts = ["-pthread"],
+)
+
+# C ABI shared library loaded from Python (ctypes). Use MMWM_LIB=bazel-bin/libmmwm.so.
+cc_binary(
+    name = "libmmwm.so",
+    srcs = ["cpp/src/c_api.cc"],
+    copts = COPTS,
+    linkshared = True,
+    deps = [":mmwm_core"],
+)
+
+cc_binary(
+    name = "mmwm_bench_latency",
+    srcs = ["cpp/bench/bench_latency.cc"],
+    copts = COPTS,
+    deps = [":mmwm_core"],
+)
+
+[cc_test(
+    name = t,
+    size = "small",
+    srcs = [
+        "cpp/tests/%s.cc" % t,
+        "cpp/tests/test_util.h",
+    ],
+    copts = COPTS,
+    deps = [":mmwm_core"],
+) for t in [
+    "test_runtime",
+    "test_model",
+]]

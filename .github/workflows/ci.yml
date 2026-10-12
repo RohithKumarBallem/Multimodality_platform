@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build valgrind
+      - name: Release build + tests (-Werror)
+        run: |
+          cmake -S . -B build -G Ninja -DMMWM_WERROR=ON
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+      - name: Python tests
+        run: |
+          export MMWM_LIB="$PWD/build/libmmwm.so"
+          PYTHONPATH=python python3 -m unittest discover -s python/tests
+      - name: Memory / UB / race checks (ASan+LSan, UBSan, TSan, valgrind)
+        run: STRICT=1 scripts/memcheck.sh all
+      - name: Latency gate
+        run: |
+          ./build/mmwm_bench_latency --out bench-result.json
+          # Absolute gate only: hosted-runner core counts differ from the baseline machine.
+          python3 scripts/compare_bench.py bench-result.json --min-reduction 40
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-result
+          path: bench-result.json
+
+  bazel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bazelisk
+        run: |
+          curl -fsSL -o bazelisk https://github.com/bazelbuild/bazelisk/releases/download/v1.25.0/bazelisk-linux-amd64
+          chmod +x bazelisk
+      - name: Test (opt, -Werror)
+        run: USE_BAZEL_VERSION=8.1.1 ./bazelisk test --config=opt --config=ci //...
+      - name: Test (ASan)
+        run: USE_BAZEL_VERSION=8.1.1 ./bazelisk test --config=asan //...
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build + test
+        run: |
+          cmake -S . -B build -DMMWM_WERROR=ON
+          cmake --build build -j
+          ctest --test-dir build --output-on-failure
+          MMWM_LIB="$PWD/build/libmmwm.dylib" PYTHONPATH=python \
+            python3 -m unittest discover -s python/tests

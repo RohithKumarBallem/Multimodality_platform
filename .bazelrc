@@ -1,0 +1,22 @@
+build --cxxopt=-std=c++20 --host_cxxopt=-std=c++20
+build --enable_platform_specific_config
+test --test_output=errors
+
+# Release-like numbers for benchmarks:  bazel run --config=opt //:mmwm_bench_latency
+build:opt -c opt
+
+# Memory / UB / race checks:  bazel test --config=asan //...
+build:asan --copt=-fsanitize=address --linkopt=-fsanitize=address
+build:asan --copt=-fno-omit-frame-pointer --copt=-g --strip=never
+build:ubsan --copt=-fsanitize=undefined --linkopt=-fsanitize=undefined
+build:ubsan --copt=-fno-sanitize-recover=all --copt=-g --strip=never
+build:tsan --copt=-fsanitize=thread --linkopt=-fsanitize=thread
+build:tsan --copt=-g --strip=never
+
+# CI: warnings are errors.
+build:ci --copt=-Werror
+
+# C++17 aligned allocation (used by Arena) needs macOS >= 10.13; pick a floor
+# that comfortably covers C++20 library features as well.
+build:macos --macos_minimum_os=10.15
+build:macos --host_macos_minimum_os=10.15
