@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <functional>
 #include <sstream>
 
 namespace mmwm {
@@ -32,8 +33,7 @@ std::vector<Profiler::Entry> Profiler::snapshot() const {
     out.reserve(entries_.size());
     for (const auto& kv : entries_) out.push_back(kv.second);
   }
-  std::sort(out.begin(), out.end(),
-            [](const Entry& a, const Entry& b) { return a.total_ms > b.total_ms; });
+  std::ranges::sort(out, std::greater<>{}, &Entry::total_ms);
   return out;
 }
 

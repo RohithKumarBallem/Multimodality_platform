@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <numbers>
 
 namespace mmwm {
 
@@ -27,7 +28,7 @@ class Rng {
     float u1 = uniform();
     if (u1 < 1e-7f) u1 = 1e-7f;
     const float u2 = uniform();
-    return std::sqrt(-2.0f * std::log(u1)) * std::cos(6.28318530717958647692f * u2);
+    return std::sqrt(-2.0f * std::log(u1)) * std::cos(2.0f * std::numbers::pi_v<float> * u2);
   }
 
   // Derive an independent stream seed from two values (e.g. seed, shard).

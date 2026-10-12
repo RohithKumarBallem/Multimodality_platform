@@ -24,7 +24,7 @@ struct Stats {
 };
 
 Stats summarize(std::vector<double> ms) {
-  std::sort(ms.begin(), ms.end());
+  std::ranges::sort(ms);
   Stats s;
   s.p50 = ms[ms.size() / 2];
   s.p95 = ms[std::min(ms.size() - 1, static_cast<size_t>(ms.size() * 0.95))];

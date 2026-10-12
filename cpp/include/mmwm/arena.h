@@ -5,6 +5,7 @@
 // Not thread-safe; allocate on the dispatching thread, then fan out work.
 #pragma once
 
+#include <bit>
 #include <cstddef>
 #include <memory>
 #include <vector>
@@ -16,6 +17,7 @@ namespace mmwm {
 class Arena {
  public:
   static constexpr size_t kAlignment = 64;
+  static_assert(std::has_single_bit(kAlignment), "alignment must be a power of two");
 
   explicit Arena(size_t chunk_bytes = 1u << 20);
   ~Arena();

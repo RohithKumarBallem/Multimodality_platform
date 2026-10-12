@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <span>
 #include <vector>
 
 namespace mmwm {
@@ -15,6 +16,8 @@ struct Matrix {
   size_t cols = 0;
 
   size_t size() const { return rows * cols; }
+  std::span<float> as_span() { return {data, size()}; }
+  std::span<const float> as_span() const { return {data, size()}; }
   float* row(size_t r) { return data + r * cols; }
   const float* row(size_t r) const { return data + r * cols; }
   float& at(size_t r, size_t c) { return data[r * cols + c]; }

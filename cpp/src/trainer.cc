@@ -15,12 +15,13 @@ namespace mmwm {
 namespace {
 
 double mse(const Matrix& a, const Matrix& b) {
+  const std::span<const float> x = a.as_span(), y = b.as_span();
   double acc = 0.0;
-  for (size_t i = 0; i < a.size(); ++i) {
-    const double d = static_cast<double>(a.data[i]) - b.data[i];
+  for (size_t i = 0; i < x.size(); ++i) {
+    const double d = static_cast<double>(x[i]) - y[i];
     acc += d * d;
   }
-  return acc / static_cast<double>(a.size());
+  return acc / static_cast<double>(x.size());
 }
 
 struct Runtime {

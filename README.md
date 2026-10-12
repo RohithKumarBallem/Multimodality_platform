@@ -30,6 +30,24 @@ checking, profiling, and a regression-release gate.
 | `scripts/` | `memcheck.sh`, `profile.sh`, `compare_bench.py`, `regression_release.sh` |
 | `CMakeLists.txt`, `BUILD.bazel`, `MODULE.bazel`, `.bazelrc` | Both build systems |
 
+## Technologies
+
+| Technology | How it is used here | Status on the dev machine |
+|---|---|---|
+| **C++20** | Core library built with `-std=c++20`; uses `<span>` (`Matrix::as_span`), `<ranges>` (`std::ranges::sort` with a projection), `<numbers>` (`pi_v`), `<bit>` (`std::has_single_bit` static_assert), plus threads/atomics/RAII | Compiles clean under `-Wall -Wextra -Wpedantic -Wshadow -Werror` (CMake and Bazel) |
+| **Python 3.10+** | Orchestration (`python/mmwm`): typed config, workflow planner, LSF/local backends, CLI, `ctypes` binding to the C ABI. Standard library only | 18 unit/e2e tests pass (3.12) |
+| **LSF** | `bsub` job arrays (`name[1-N]%throttle`), `ended()`/`done()` dependencies, `LSB_JOBINDEX` shard mapping, `rusage[mem]`, queue/project/walltime | Command generation unit-tested and exercised against a fake `bsub`; **not run on a real LSF cluster** |
+| **CMake** (≥ 3.20, Ninja) | Primary build: static core, shared C-ABI library, ctest, `MMWM_SANITIZE`, `MMWM_WERROR` | Verified |
+| **Bazel** (bzlmod, 8.x) | `cc_library` / `cc_binary` / `cc_test`, `--config=opt|ci|asan|ubsan|tsan`; `//:libmmwm.so` for Python | `bazel test --config=opt --config=ci //...` passes; also stage 3 of the release gate |
+| **Git** | Source control; the release script stamps the short SHA into the artifact name and, with `--tag`, cuts an annotated `v<version>` tag from a clean tree after all gates pass | Verified |
+| **Memory checking** | ASan + LSan, UBSan, TSan, valgrind memcheck via `scripts/memcheck.sh`, also `--config=asan` in Bazel | **UBSan verified locally.** ASan/TSan runtimes crash on this machine's toolchain and valgrind is not installed, so those are skipped locally and run (`STRICT=1`) in CI |
+| **Performance profiling** | Built-in scoped-timer profiler (`MMWM_PROFILE`, `mmwm_bench_latency --profile`); `scripts/profile.sh` adds `perf record` or `valgrind --tool=callgrind` where installed | Built-in profiler verified; `perf`/callgrind not available locally |
+| **GitHub Actions** | `.github/workflows/ci.yml`: Linux (CMake, sanitizers, valgrind, latency gate), Bazel (opt + ASan), macOS | Written, **not yet run** |
+
+Deliberately *not* used: GPUs/CUDA, MPI, PyTorch/other ML frameworks, pybind11,
+GoogleTest. The model is a small random-feature + residual-dynamics model, and
+the tests use a dependency-free harness to keep the Bazel/CMake builds hermetic.
+
 ## Build and test
 
 ```bash
@@ -75,8 +93,14 @@ train arrays (shards, split to fit MAX_JOB_ARRAY_SIZE)
 ```bash
 scripts/memcheck.sh all      # ASan(+LSan), UBSan, TSan, valgrind; STRICT=1 makes skips fatal
 scripts/profile.sh           # built-in scope timers + perf/callgrind when available
-scripts/regression_release.sh   # build -Werror → tests → memcheck → pytests → bench gate → package
+scripts/regression_release.sh            # 7 gated stages below
+scripts/regression_release.sh --tag      # ...then cut annotated tag v<version> (clean tree only)
 ```
+
+Stages: CMake `-Werror` build → ctest → Bazel build+test → memcheck → Python
+tests → latency gate → package (`dist/mmwm-<version>-<sha>-<os>-<arch>.tar.gz`).
+`STRICT=1` makes an unavailable tool (Bazel, a sanitizer, valgrind) a failure
+instead of a skip.
 
 The bench gate fails the release if the optimized path is not ≥ 40 % lower
 latency than the reference path, or its optimized/reference ratio regresses > 15 %
@@ -109,10 +133,14 @@ latent error is ~42 % below a copy-last-latent baseline (~50 % over a 4-step rol
 
 Verified locally: CMake `-Werror` build, C++ tests, UBSan run, Bazel 8.1.1
 build/test, Python tests (including a fake-`bsub` submission test), the full
-local multi-round workflow, the release script.
+local multi-round workflow, and all 7 release-gate stages.
 
-Not verified here: **a real LSF cluster** (submission is exercised against a
-fake `bsub` and the `bsub` command shape is unit-tested, but nothing ran on 10,000
-nodes), and **ASan/LSan/TSan/valgrind**, because the sanitizer runtimes on the
-development machine crash on a trivial program; `memcheck.sh` detects that and
-skips (CI runs them with `STRICT=1` on Linux).
+Not verified here:
+
+* **A real LSF cluster.** Submission is exercised against a fake `bsub` and the
+  command shape is unit-tested, but nothing ran on 10,000 nodes.
+* **ASan / LSan / TSan / valgrind**, because the sanitizer runtimes on the
+  development machine crash on a trivial program. `memcheck.sh` detects that and
+  skips; CI runs them with `STRICT=1` on Linux.
+* **`perf` / callgrind** profiling paths in `scripts/profile.sh`.
+* The **GitHub Actions** workflow itself.
