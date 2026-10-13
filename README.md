@@ -38,11 +38,11 @@ checking, profiling, and a regression-release gate.
 | **Python 3.10+** | Orchestration (`python/mmwm`): typed config, workflow planner, LSF/local backends, CLI, `ctypes` binding to the C ABI. Standard library only | 18 unit/e2e tests pass (3.12) |
 | **LSF** | `bsub` job arrays (`name[1-N]%throttle`), `ended()`/`done()` dependencies, `LSB_JOBINDEX` shard mapping, `rusage[mem]`, queue/project/walltime | Command generation unit-tested and exercised against a fake `bsub`; **not run on a real LSF cluster** |
 | **CMake** (≥ 3.20, Ninja) | Primary build: static core, shared C-ABI library, ctest, `MMWM_SANITIZE`, `MMWM_WERROR` | Verified |
-| **Bazel** (bzlmod, 8.x) | `cc_library` / `cc_binary` / `cc_test`, `--config=opt|ci|asan|ubsan|tsan`; `//:libmmwm.so` for Python | `bazel test --config=opt --config=ci //...` passes; also stage 3 of the release gate |
+| **Bazel** (bzlmod, 8.x) | `cc_library` / `cc_binary` / `cc_test`, `--config=opt|ci|asan|ubsan|tsan`; `//:libmmwm.so` for Python | `bazel test --config=opt --config=ci //...` passes (macOS locally; Linux opt + ASan in CI); also stage 3 of the release gate |
 | **Git** | Source control; the release script stamps the short SHA into the artifact name and, with `--tag`, cuts an annotated `v<version>` tag from a clean tree after all gates pass | Verified |
-| **Memory checking** | ASan + LSan, UBSan, TSan, valgrind memcheck via `scripts/memcheck.sh`, also `--config=asan` in Bazel | **UBSan verified locally.** ASan/TSan runtimes crash on this machine's toolchain and valgrind is not installed, so those are skipped locally and run (`STRICT=1`) in CI |
+| **Memory checking** | ASan + LSan, UBSan, TSan, valgrind memcheck via `scripts/memcheck.sh`, also `--config=asan` in Bazel | **All four pass in CI on Linux** (`STRICT=1`, so a skip would fail the job). Locally on the macOS dev machine only UBSan runs: its ASan/TSan runtimes crash on a trivial program and valgrind isn't installed, so `memcheck.sh` skips those there |
 | **Performance profiling** | Built-in scoped-timer profiler (`MMWM_PROFILE`, `mmwm_bench_latency --profile`); `scripts/profile.sh` adds `perf record` or `valgrind --tool=callgrind` where installed | Built-in profiler verified; `perf`/callgrind not available locally |
-| **GitHub Actions** | `.github/workflows/ci.yml`: Linux (CMake, sanitizers, valgrind, latency gate), Bazel (opt + ASan), macOS | Written, **not yet run** |
+| **GitHub Actions** | `.github/workflows/ci.yml`: Linux (CMake, sanitizers, valgrind, latency gate), Bazel (opt + ASan), macOS | Passing: Linux (CMake `-Werror`, ctest, Python tests, sanitizers, valgrind, latency gate), Bazel (opt + ASan), macOS |
 
 Deliberately *not* used: GPUs/CUDA, MPI, PyTorch/other ML frameworks, pybind11,
 GoogleTest. The model is a small random-feature + residual-dynamics model, and
@@ -131,16 +131,17 @@ latent error is ~42 % below a copy-last-latent baseline (~50 % over a 4-step rol
 
 ## What has and hasn't been verified
 
-Verified locally: CMake `-Werror` build, C++ tests, UBSan run, Bazel 8.1.1
-build/test, Python tests (including a fake-`bsub` submission test), the full
-local multi-round workflow, and all 7 release-gate stages.
+Verified locally (macOS): CMake `-Werror` build, C++ tests, UBSan run, Bazel
+8.1.1 build/test, Python tests (including a fake-`bsub` submission test), the
+full local multi-round workflow, and all 7 release-gate stages.
 
-Not verified here:
+Verified in GitHub Actions (Linux + macOS): CMake `-Werror` build and tests,
+ASan + LSan, UBSan, TSan and valgrind with `STRICT=1`, Bazel opt and ASan,
+Python tests, and the latency gate (absolute ≥ 40 % check only; the baseline
+file is machine-specific).
+
+Not verified:
 
 * **A real LSF cluster.** Submission is exercised against a fake `bsub` and the
   command shape is unit-tested, but nothing ran on 10,000 nodes.
-* **ASan / LSan / TSan / valgrind**, because the sanitizer runtimes on the
-  development machine crash on a trivial program. `memcheck.sh` detects that and
-  skips; CI runs them with `STRICT=1` on Linux.
 * **`perf` / callgrind** profiling paths in `scripts/profile.sh`.
-* The **GitHub Actions** workflow itself.
