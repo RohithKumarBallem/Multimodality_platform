@@ -70,6 +70,13 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_worker(args: argparse.Namespace) -> int:
     cfg = _load(args.config)
+    if cfg.train.use_blas:
+        # BLAS libraries start their own thread pools; cap them to this worker's
+        # allotment so 10,000 workers don't each spawn one thread per node core.
+        # Must be set before the native library is first loaded.
+        limit = str(max(1, cfg.train.threads))
+        for var in ("OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "OMP_NUM_THREADS"):
+            os.environ.setdefault(var, limit)
     shard = args.shard_offset + _index(args) - 1
     m = workflow.run_worker(cfg, workflow.Layout(cfg.workdir), args.round, shard)
     print(json.dumps(m) if m else f"shard {shard} out of range; nothing to do")

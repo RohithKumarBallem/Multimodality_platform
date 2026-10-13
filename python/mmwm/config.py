@@ -49,6 +49,7 @@ class TrainConfig:
     batch_size: int = 32
     lr: float = 0.05
     threads: int = 1           # threads per worker process
+    use_blas: bool = False     # vendor sgemm (needs a BLAS build); see README on BLAS threads
 
     def validate(self) -> None:
         if self.rounds < 1 or self.steps < 1 or self.batch_size < 1 or self.threads < 0:

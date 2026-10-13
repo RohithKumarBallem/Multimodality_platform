@@ -4,19 +4,52 @@
     "horizon": 8,
     "d_model": 256,
     "iters": 30,
-    "threads": 12
+    "threads": 12,
+    "blas": true
   },
   "reference": {
-    "p50_ms": 466.0723,
-    "p95_ms": 514.759,
-    "mean_ms": 461.5461
+    "p50_ms": 385.0422,
+    "p95_ms": 391.6264,
+    "mean_ms": 381.9429
+  },
+  "v1": {
+    "p50_ms": 12.1035,
+    "p95_ms": 13.166,
+    "mean_ms": 12.0782
   },
   "optimized": {
-    "p50_ms": 15.3284,
-    "p95_ms": 18.7074,
-    "mean_ms": 15.7922
+    "p50_ms": 8.8238,
+    "p95_ms": 9.9107,
+    "mean_ms": 8.8916
   },
-  "speedup": 30.406,
-  "latency_reduction_pct": 96.71,
-  "max_abs_diff": 0
+  "speedup": 43.637,
+  "latency_reduction_pct": 97.71,
+  "reduction_vs_v1_pct": 27.1,
+  "max_abs_diff": 1.43e-06,
+  "stages": [
+    {
+      "name": "reference",
+      "p50_ms": 385.0422,
+      "p95_ms": 391.6264,
+      "max_abs_diff": 0
+    },
+    {
+      "name": "v1-tiled-arena-mt",
+      "p50_ms": 12.1035,
+      "p95_ms": 13.166,
+      "max_abs_diff": 0
+    },
+    {
+      "name": "+fast-tanh",
+      "p50_ms": 8.8238,
+      "p95_ms": 9.9107,
+      "max_abs_diff": 1.43e-06
+    },
+    {
+      "name": "+blas-sgemm",
+      "p50_ms": 4.9588,
+      "p95_ms": 5.8284,
+      "max_abs_diff": 1.91e-06
+    }
+  ]
 }

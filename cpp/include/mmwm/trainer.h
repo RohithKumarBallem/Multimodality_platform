@@ -17,6 +17,8 @@ struct TrainOptions {
   uint64_t shard_index = 0;  // which slice of the global data stream
   unsigned threads = 1;      // 0 -> hardware_concurrency
   ExecMode mode = ExecMode::kOptimized;
+  bool use_blas = false;     // vendor sgemm; throws if not compiled in. BLAS libraries
+                             // manage their own threads (see README on thread limits).
 };
 
 struct TrainResult {

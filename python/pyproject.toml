@@ -7,6 +7,7 @@ name = "mmwm"
 version = "0.1.0"
 description = "Orchestration layer for the multimodal world-model research platform"
 requires-python = ">=3.10"
+authors = [{ name = "Rohith Kumar Ballem", email = "brohithkum@gmail.com" }]
 dependencies = []
 
 [project.scripts]

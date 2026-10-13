@@ -1,5 +1,10 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 
+config_setting(
+    name = "macos",
+    constraint_values = ["@platforms//os:macos"],
+)
+
 package(default_visibility = ["//visibility:public"])
 
 COPTS = [
@@ -18,7 +23,19 @@ cc_library(
     hdrs = glob(["cpp/include/mmwm/*.h"]),
     copts = COPTS,
     includes = ["cpp/include"],
-    linkopts = ["-pthread"],
+    # macOS: the BLAS stage uses Accelerate. Elsewhere it is compiled out
+    # (CMake enables it when a cblas.h BLAS is found).
+    defines = select({
+        ":macos": [
+            "MMWM_HAVE_BLAS",
+            "MMWM_BLAS_ACCELERATE",
+        ],
+        "//conditions:default": [],
+    }),
+    linkopts = ["-pthread"] + select({
+        ":macos": ["-framework Accelerate"],
+        "//conditions:default": [],
+    }),
 )
 
 # C ABI shared library loaded from Python (ctypes). Use MMWM_LIB=bazel-bin/libmmwm.so.

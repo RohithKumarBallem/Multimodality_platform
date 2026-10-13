@@ -30,6 +30,8 @@ typedef struct mmwm_train_args {
   uint64_t round, shard_index;
   uint32_t threads;
   uint32_t reference_mode; /* 1 = naive reference path (for A/B timing) */
+  uint32_t use_blas;       /* 1 = vendor sgemm; error if built without BLAS */
+  uint32_t reserved;
 } mmwm_train_args;
 
 typedef struct mmwm_train_result {

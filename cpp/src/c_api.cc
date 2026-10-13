@@ -67,6 +67,7 @@ int mmwm_train_shard(const mmwm_train_args* a, const char* init_ckpt, const char
     opt.shard_index = a->shard_index;
     opt.threads = a->threads;
     opt.mode = a->reference_mode ? mmwm::ExecMode::kReference : mmwm::ExecMode::kOptimized;
+    opt.use_blas = a->use_blas != 0;
     const mmwm::TrainResult r = mmwm::train_shard(model, opt);
 
     mmwm::save_checkpoint(out_ckpt, mmwm::checkpoint_from_model(model, r.samples));

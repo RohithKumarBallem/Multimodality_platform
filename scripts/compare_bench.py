@@ -2,8 +2,11 @@
 """Gate a benchmark result.
 
 Gates (all must pass):
-  1. latency_reduction_pct >= --min-reduction        (optimized vs reference path)
-  2. optimized/reference p50 ratio did not regress by more than
+  1. latency_reduction_pct >= --min-reduction        (optimized vs the naive
+     reference path; a sanity floor, since the reference is deliberately slow)
+  2. reduction_vs_v1_pct >= --min-reduction-vs-v1    (optimized vs the v1
+     tiled/arena/threaded path: the gain from the profile-guided stages)
+  3. optimized/reference p50 ratio did not regress by more than
      --max-regression-pct versus the baseline file (skipped when the baseline
      was recorded with a different thread count: the ratio is only comparable
      on like-for-like hardware).
@@ -34,6 +37,7 @@ def main():
     ap.add_argument("result")
     ap.add_argument("--baseline", default=None)
     ap.add_argument("--min-reduction", type=float, default=40.0)
+    ap.add_argument("--min-reduction-vs-v1", type=float, default=10.0)
     ap.add_argument("--max-regression-pct", type=float, default=15.0)
     ap.add_argument("--update-baseline", action="store_true",
                     help="write RESULT to --baseline and exit 0")
@@ -61,6 +65,14 @@ def main():
     red = res["latency_reduction_pct"]
     gate("latency-reduction", red >= a.min_reduction,
          f"{red:.1f}% (required >= {a.min_reduction:.1f}%)")
+
+    if "reduction_vs_v1_pct" in res:
+        v1 = res["reduction_vs_v1_pct"]
+        gate("reduction-vs-v1", v1 >= a.min_reduction_vs_v1,
+             f"{v1:.1f}% (required >= {a.min_reduction_vs_v1:.1f}%)")
+
+    for st in res.get("stages", []):
+        print(f"       {st['name']:<20} p50 {st['p50_ms']:>9.2f} ms")
 
     if a.baseline and Path(a.baseline).exists():
         base = load(a.baseline)

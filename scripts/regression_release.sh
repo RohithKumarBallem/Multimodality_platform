@@ -79,7 +79,7 @@ if [ "$UPDATE" = 1 ]; then
   "$PY" scripts/compare_bench.py "$DIST/bench.json" --baseline "$BASELINE" --update-baseline
 fi
 "$PY" scripts/compare_bench.py "$DIST/bench.json" --baseline "$BASELINE" \
-      --min-reduction 40 --report "$DIST/gate_report.json"
+      --min-reduction 40 --min-reduction-vs-v1 10 --report "$DIST/gate_report.json"
 
 step "7/7 package"
 PKG="$DIST/mmwm-$STAMP"

@@ -74,7 +74,26 @@ class WorkflowE2E(unittest.TestCase):
             self.assertEqual(workflow.run_reduce_final(cfg, layout, 0)["shards"], 6)
 
             layout.shard_ckpt(0, 7).unlink()  # 5/8 < 0.75
+            # Level 0 merges survivors; the global budget is enforced at the end.
+            self.assertEqual(workflow.run_reduce_level0(cfg, layout, 0, 0)["shards"], 5)
             with self.assertRaisesRegex(RuntimeError, "min_shard_fraction"):
+                workflow.run_reduce_final(cfg, layout, 0)
+
+    def test_failures_clustered_in_one_group_do_not_drop_the_group(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = cfg_for(d, num_shards=8, reduce_fan_in=4, min_shard_fraction=0.7)
+            layout = workflow.Layout(d)
+            for i in range(8):
+                workflow.run_worker(cfg, layout, 0, i)
+            for i in (0, 1):  # half of group 0 lost: 6/8 = 0.75 overall, within budget
+                layout.shard_ckpt(0, i).unlink()
+            for g in range(2):
+                workflow.run_reduce_level0(cfg, layout, 0, g)
+            self.assertEqual(workflow.run_reduce_final(cfg, layout, 0)["shards"], 6)
+
+            for i in (2, 3):  # group 0 now has no shards at all
+                layout.shard_ckpt(0, i).unlink()
+            with self.assertRaisesRegex(RuntimeError, "none of its"):
                 workflow.run_reduce_level0(cfg, layout, 0, 0)
 
     def test_hierarchical_reduce_matches_flat_reduce(self):

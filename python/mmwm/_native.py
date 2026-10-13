@@ -34,6 +34,8 @@ class _CTrainArgs(ctypes.Structure):
         ("shard_index", ctypes.c_uint64),
         ("threads", ctypes.c_uint32),
         ("reference_mode", ctypes.c_uint32),
+        ("use_blas", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
     ]
 
 
@@ -131,10 +133,10 @@ def version() -> str:
 def train_shard(model: ModelConfig, *, steps: int, batch_size: int, lr: float,
                 round: int, shard_index: int, out_ckpt: str | os.PathLike,
                 init_ckpt: str | os.PathLike | None = None, threads: int = 1,
-                reference: bool = False) -> TrainResult:
+                reference: bool = False, use_blas: bool = False) -> TrainResult:
     lib = _load()
     args = _CTrainArgs(_c_model(model), steps, batch_size, lr, round, shard_index,
-                       threads, 1 if reference else 0)
+                       threads, 1 if reference else 0, 1 if use_blas else 0, 0)
     res = _CTrainResult()
     err = ctypes.create_string_buffer(_ERR_LEN)
     rc = lib.mmwm_train_shard(ctypes.byref(args), _enc(init_ckpt), _enc(out_ckpt),

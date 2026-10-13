@@ -68,6 +68,55 @@ static void test_reference_and_optimized_agree() {
   }
 }
 
+static void test_all_opt_flag_combinations_match_reference() {
+  const ModelConfig cfg = small_cfg();
+  WorldModel model(cfg);
+  SyntheticWorld world(cfg);
+  Rng rng(9);
+  auto seq = world.sample_sequence(10, 2, rng);
+  std::vector<float> actions;
+  for (size_t t = 0; t < 2; ++t)
+    actions.insert(actions.end(), seq[t].action.begin(), seq[t].action.end());
+
+  ExecContext ref = ExecContext::Reference();
+  Matrix z_ref = model.encode(seq[0], ref);
+  Matrix r_ref = model.rollout(z_ref, actions.data(), 2, ref);
+
+  for (bool fast : {false, true}) {
+    for (bool blas : {false, true}) {
+      if (blas && !ExecContext::has_blas()) {
+        Arena a;
+        CHECK_THROWS(ExecContext::Optimized(a, nullptr, OptFlags{fast, true}));
+        continue;
+      }
+      for (unsigned threads : {1u, 3u}) {
+        Arena arena;
+        ThreadPool pool(threads);
+        ExecContext opt = ExecContext::Optimized(arena, &pool, OptFlags{fast, blas});
+        Matrix z = model.encode(seq[0], opt);
+        Matrix r = model.rollout(z, actions.data(), 2, opt);
+        for (size_t i = 0; i < z_ref.size(); ++i) CHECK_NEAR(z_ref.data[i], z.data[i], 2e-4);
+        for (size_t i = 0; i < r_ref.size(); ++i) CHECK_NEAR(r_ref.data[i], r.data[i], 2e-3);
+      }
+    }
+  }
+}
+
+static void test_blas_training_matches_builtin() {
+  if (!ExecContext::has_blas()) return;
+  const ModelConfig cfg = small_cfg();
+  TrainOptions opt;
+  opt.steps = 15;
+  opt.batch_size = 16;
+  opt.lr = 0.05f;
+  WorldModel a(cfg), b(cfg);
+  train_shard(a, opt);
+  opt.use_blas = true;
+  train_shard(b, opt);
+  for (size_t i = 0; i < a.dyn_weight().vec().size(); ++i)
+    CHECK_NEAR(a.dyn_weight().vec()[i], b.dyn_weight().vec()[i], 5e-3);
+}
+
 static void test_modality_subsets() {
   const ModelConfig cfg = small_cfg();
   WorldModel model(cfg);
@@ -223,6 +272,8 @@ static void test_profiler() {
 
 int main() {
   test_reference_and_optimized_agree();
+  test_all_opt_flag_combinations_match_reference();
+  test_blas_training_matches_builtin();
   test_modality_subsets();
   test_training_reduces_loss_and_beats_copy();
   test_training_is_deterministic_across_modes_and_threads();

@@ -191,7 +191,8 @@ def run_worker(cfg: PlatformConfig, layout: Layout, rnd: int, shard: int,
     t = cfg.train
     res = _native.train_shard(
         cfg.model, steps=t.steps, batch_size=t.batch_size, lr=t.lr, round=rnd,
-        shard_index=shard, out_ckpt=out, init_ckpt=init, threads=t.threads)
+        shard_index=shard, out_ckpt=out, init_ckpt=init, threads=t.threads,
+        use_blas=t.use_blas)
     metrics = {"shard": shard, "round": rnd, "samples": res.samples,
                "first_loss": res.first_loss, "last_loss": res.last_loss,
                "seconds": res.seconds}
@@ -209,11 +210,12 @@ def run_reduce_level0(cfg: PlatformConfig, layout: Layout, rnd: int, group: int)
         raise ValueError(f"reduce group {group} is out of range (have {num_groups(cfg)})")
     present = [i for i in shards
                if layout.shard_ckpt(rnd, i).exists() and layout.shard_json(rnd, i).exists()]
-    need = _min_required(len(shards), cfg.cluster.min_shard_fraction)
-    if len(present) < need:
-        raise RuntimeError(
-            f"group {group}: only {len(present)}/{len(shards)} shards present "
-            f"(< min_shard_fraction={cfg.cluster.min_shard_fraction})")
+    # Merge whatever survived. The min_shard_fraction budget is global and is
+    # enforced once, in run_reduce_final: failures cluster (a bad rack takes out
+    # a whole group), and discarding a mostly-healthy group to honour a
+    # per-group quota would throw away good shards for no benefit.
+    if not present:
+        raise RuntimeError(f"group {group}: none of its {len(shards)} shards are present")
     out = layout.partial_ckpt(rnd, group)
     out.parent.mkdir(parents=True, exist_ok=True)
     _native.reduce([layout.shard_ckpt(rnd, i) for i in present], out)

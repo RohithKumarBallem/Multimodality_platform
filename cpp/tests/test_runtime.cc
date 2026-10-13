@@ -1,10 +1,13 @@
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <numeric>
 #include <stdexcept>
 #include <vector>
 
 #include "mmwm/arena.h"
 #include "mmwm/exec_context.h"
+#include "mmwm/fastmath.h"
 #include "mmwm/rng.h"
 #include "mmwm/thread_pool.h"
 #include "test_util.h"
@@ -99,6 +102,19 @@ static void test_matmul_modes_agree() {
   }
 }
 
+static void test_fast_tanh_accuracy() {
+  double max_err = 0.0;
+  for (int i = -24000; i <= 24000; ++i) {  // [-12, 12] in steps of 0.0005
+    const float x = static_cast<float>(i) * 0.0005f;
+    max_err = std::max(max_err, std::fabs(static_cast<double>(fast_tanhf(x)) - std::tanh(double(x))));
+  }
+  CHECK(max_err < 2e-6);
+  CHECK_NEAR(fast_tanhf(0.0f), 0.0, 1e-12);
+  CHECK_NEAR(fast_tanhf(100.0f), 1.0, 1e-5);   // saturates, no overflow / NaN
+  CHECK_NEAR(fast_tanhf(-100.0f), -1.0, 1e-5);
+  CHECK(std::isfinite(fast_tanhf(1e30f)));
+}
+
 static void test_rng_determinism() {
   Rng a(42), b(42), c(43);
   for (int i = 0; i < 100; ++i) CHECK(a.next_u64() == b.next_u64());
@@ -119,6 +135,7 @@ int main() {
   test_arena();
   test_thread_pool();
   test_matmul_modes_agree();
+  test_fast_tanh_accuracy();
   test_rng_determinism();
   TEST_MAIN_END();
 }

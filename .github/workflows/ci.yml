@@ -27,7 +27,11 @@ jobs:
         run: |
           ./build/mmwm_bench_latency --out bench-result.json
           # Absolute gate only: hosted-runner core counts differ from the baseline machine.
-          python3 scripts/compare_bench.py bench-result.json --min-reduction 40
+          python3 scripts/compare_bench.py bench-result.json --min-reduction 40 --min-reduction-vs-v1 10
+      - name: Orchestration at scale (1,000 shards, fault injection)
+        run: |
+          MMWM_LIB="$PWD/build/libmmwm.so" python3 scripts/scale_test.py \
+            --shards 1000 --fail-rate 0.02 --min-fraction 0.95 --workdir "$RUNNER_TEMP/scale"
       - uses: actions/upload-artifact@v4
         with:
           name: bench-result

@@ -27,7 +27,7 @@ checking, profiling, and a regression-release gate.
 | `cpp/bench` | Reference-vs-optimized latency benchmark (JSON output, `--profile`) |
 | `python/mmwm` | ctypes bindings, typed config, workflow planner, LSF + local backends, CLI |
 | `configs/` | `smoke.json` (local), `lsf_10k.json` (10,000 shards on LSF) |
-| `scripts/` | `memcheck.sh`, `profile.sh`, `compare_bench.py`, `regression_release.sh` |
+| `scripts/` | `memcheck.sh`, `profile.sh`, `compare_bench.py`, `regression_release.sh`, `scale_test.py` |
 | `CMakeLists.txt`, `BUILD.bazel`, `MODULE.bazel`, `.bazelrc` | Both build systems |
 
 ## Technologies
@@ -37,6 +37,7 @@ checking, profiling, and a regression-release gate.
 | **C++20** | Core library built with `-std=c++20`; uses `<span>` (`Matrix::as_span`), `<ranges>` (`std::ranges::sort` with a projection), `<numbers>` (`pi_v`), `<bit>` (`std::has_single_bit` static_assert), plus threads/atomics/RAII | Compiles clean under `-Wall -Wextra -Wpedantic -Wshadow -Werror` (CMake and Bazel) |
 | **Python 3.10+** | Orchestration (`python/mmwm`): typed config, workflow planner, LSF/local backends, CLI, `ctypes` binding to the C ABI. Standard library only | 18 unit/e2e tests pass (3.12) |
 | **LSF** | `bsub` job arrays (`name[1-N]%throttle`), `ended()`/`done()` dependencies, `LSB_JOBINDEX` shard mapping, `rusage[mem]`, queue/project/walltime | Command generation unit-tested and exercised against a fake `bsub`; **not run on a real LSF cluster** |
+| **Vendor BLAS** | Optional `sgemm` stage: Accelerate on macOS, any BLAS with `cblas.h` elsewhere (`-DMMWM_USE_BLAS`); worker caps BLAS threads to `train.threads` | Verified on macOS (Accelerate); Linux path compiled out in CI |
 | **CMake** (≥ 3.20, Ninja) | Primary build: static core, shared C-ABI library, ctest, `MMWM_SANITIZE`, `MMWM_WERROR` | Verified |
 | **Bazel** (bzlmod, 8.x) | `cc_library` / `cc_binary` / `cc_test`, `--config=opt|ci|asan|ubsan|tsan`; `//:libmmwm.so` for Python | `bazel test --config=opt --config=ci //...` passes (macOS locally; Linux opt + ASan in CI); also stage 3 of the release gate |
 | **Git** | Source control; the release script stamps the short SHA into the artifact name and, with `--tag`, cuts an annotated `v<version>` tag from a clean tree after all gates pass | Verified |
@@ -102,46 +103,98 @@ tests → latency gate → package (`dist/mmwm-<version>-<sha>-<os>-<arch>.tar.g
 `STRICT=1` makes an unavailable tool (Bazel, a sanitizer, valgrind) a failure
 instead of a skip.
 
-The bench gate fails the release if the optimized path is not ≥ 40 % lower
-latency than the reference path, or its optimized/reference ratio regresses > 15 %
-against `bench/baseline.json` (same thread count only).
+The bench gate fails the release if the portable optimised path is not ≥ 40 %
+below the reference (a sanity floor), not ≥ 10 % below v1 (the profile-guided
+gain), or its optimised/reference ratio regresses > 15 % against
+`bench/baseline.json` (same thread count only).
 
-## Measured results (this repo, one machine)
+## Measured results (one machine, reproducible)
 
-Intel i7-9750H (12 hardware threads), macOS, Apple clang 17, Release.
-Encode + 8-step rollout, batch 64, d_model 256, text 32 / 64 patches×192 / 50 frames×80.
+Intel i7-9750H (6 cores / 12 threads, AVX2+FMA capable), macOS, Apple clang 17,
+Release build. Workload: encode + 8-step rollout, batch 64, d_model 256, text
+32 / 64 image patches × 192 / 50 audio frames × 80. `mmwm_bench_latency` runs all
+stages interleaved and checks each against the reference numerically.
 
-| Path | p50 latency |
+### Profile-guided optimisation ladder
+
+The starting point ("v1") is the tiled + arena + thread-pool implementation. A
+single-thread profile of v1 (`--profile`) put ~55 ms per call in `encode`, nearly
+all of it the image/audio projections; a microbenchmark put libm `tanhf` at
+~7.8 ms per million elements, i.e. ~14 ms (≈ 25 %) of that encode; and the default
+build targets baseline SSE2 only. Each stage below was kept only because it
+measured faster.
+
+| Stage | 12 threads vs v1 | 1 thread vs v1 | Notes |
+|---|---|---|---|
+| v1: tiled matmul + arena + thread pool | — (≈ 10–15 ms) | — (≈ 43–56 ms) | |
+| + fast rational `tanh` (`fast_tanhf`) | **−23…−27 %** | **−22…−28 %** | portable; accuracy tested < 2e-6 |
+| + vendor sgemm (`use_blas`, Accelerate/cblas) | **−45…−59 %** | **−84…−87 %** | needs a BLAS build; manages its own threads |
+| *tried, removed:* fused bias+tanh+pool epilogue | no gain (within noise) | no gain | hypothesis (memory traffic) was wrong; code deleted |
+
+Build-flag note: with `-DMMWM_NATIVE=ON` (`-march=native`, not portable) my own
+kernels get AVX2+FMA, and v1 → +fast-tanh is −43 % at 12 threads (≈ 8.0 → 4.6 ms)
+and −46 % single-threaded; vendor BLAS is still ~3× faster on one thread but does
+not scale across threads at these small matrix sizes, so at 12 threads the two are
+within noise (4.6 vs 5.0 ms).
+
+So a ≥ 40 % latency reduction relative to the pre-profiling implementation is
+reproducible here, but it takes either vendor BLAS or a `-march=native` build; the
+portable default build gets ~23–27 %. Ranges above are min…max over 4–5
+interleaved runs; absolute times drift ±20 % with machine load, so treat single
+percentages as ±5 points.
+
+The reference path (naive ijk matmul, per-call heap allocation, 1 thread) is
+~280–470 ms; it exists as a correctness oracle and an explicit "unoptimised"
+point, **not** as something the optimisations should be credited against. It is
+deliberately slow, so reductions against it (≈ 96–98 %) are not meaningful as a
+performance claim.
+
+### Orchestration at 10,000 shards (`scripts/scale_test.py`)
+
+The real workflow (job planning, worker processes, shard layout, two-level
+reduction tree) run at full scale on one machine, with fault injection:
+
+| | |
 |---|---|
-| Reference (naive ijk matmul, per-call heap allocation, 1 thread) | ~280–335 ms |
-| Optimized, 1 thread (register-tiled matmul + arena) | ~84 ms (**−73 %**, 3.8×) |
-| Optimized, 12 threads | ~11.4 ms (**−96 %**, ~25×) |
+| Shards trained | 10,000 / 10,000 (10 arrays × 1,000), 14 shards/s, 690 s |
+| Injected loss | 150 random shard checkpoints (1.5 %); worst reducer group lost 5/100 |
+| Reduction | 100 level-0 reducers → final merge; merged 9,850 = all survivors |
+| Correctness | hierarchical merge equals flat merge over the survivors (max \|diff\| 7e-9) |
+| Footprint | largest process RSS 19 MB; 187 MB of checkpoints (tiny model) |
 
-Outputs of the two paths agree (max abs diff in the bench is checked).
+This test found a real design bug: level-0 reducers originally enforced
+`min_shard_fraction` per group, so a group with a few lost shards was dropped
+wholesale. The budget is now global and enforced once at the final merge.
 
-**How to read these numbers.** The "reference" is the deliberately unoptimised
-implementation in this repository, not an external system or a production model;
-the percentages show what tiling, arena allocation and threading buy on this
-workload and give the regression gate something to compare against. They are not
-a claim about any other model. Reproduce with `build/mmwm_bench_latency` (add
-`--threads 1` to isolate the single-thread gain).
+What this does **not** show: cluster scheduling, node failure modes, shared-FS
+behaviour, or multi-node compute: each "worker" here is a local process on one
+machine, and the model is deliberately tiny.
 
 Training sanity (smoke config, 8 shards × 2 rounds): the merged model's one-step
 latent error is ~42 % below a copy-last-latent baseline (~50 % over a 4-step rollout).
 
 ## What has and hasn't been verified
 
-Verified locally (macOS): CMake `-Werror` build, C++ tests, UBSan run, Bazel
-8.1.1 build/test, Python tests (including a fake-`bsub` submission test), the
-full local multi-round workflow, and all 7 release-gate stages.
+Verified locally (macOS): CMake `-Werror` build, C++ tests (incl. all
+fast-tanh/BLAS flag combinations against the reference), UBSan run, Bazel 8.1.1
+build/test, Python tests (incl. a fake-`bsub` submission test and clustered-failure
+cases), the full local multi-round workflow, the **10,000-shard fault-injection
+run**, and all 7 release-gate stages.
 
 Verified in GitHub Actions (Linux + macOS): CMake `-Werror` build and tests,
 ASan + LSan, UBSan, TSan and valgrind with `STRICT=1`, Bazel opt and ASan,
-Python tests, and the latency gate (absolute ≥ 40 % check only; the baseline
-file is machine-specific).
+Python tests, and the latency gate. (The BLAS stage is compiled out on the Linux
+runner, which has no `cblas.h`.)
 
 Not verified:
 
 * **A real LSF cluster.** Submission is exercised against a fake `bsub` and the
-  command shape is unit-tested, but nothing ran on 10,000 nodes.
+  command shape is unit-tested; the scale test uses local processes.
+* **Real data.** The world is a deterministic synthetic generator and the
+  encoders are fixed random projections; this validates the system, not model
+  quality on real multimodal data.
 * **`perf` / callgrind** profiling paths in `scripts/profile.sh`.
+
+## Author
+
+Rohith Kumar Ballem · <brohithkum@gmail.com> · [github.com/RohithKumarBallem](https://github.com/RohithKumarBallem)

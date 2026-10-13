@@ -1,12 +1,22 @@
-// Latency benchmark: reference (naive) vs optimized execution of the
-// encode + rollout inference path. Emits JSON consumed by
-// scripts/compare_bench.py. Also verifies both paths agree numerically.
+// Latency benchmark for the encode + rollout inference path.
+//
+// Runs the naive reference path and a ladder of optimisation stages, verifies
+// every stage against the reference numerically, and reports the p50/p95 of
+// each so the contribution of every stage is visible:
+//
+//   reference            naive ijk matmul, heap allocation per intermediate, 1 thread
+//   v1-tiled-arena-mt    register-tiled matmul + arena + thread pool (std::tanh, unfused)
+//   +fast-tanh           vectorisable rational tanh (portable; reported as "optimized")
+//   +blas-sgemm          vendor sgemm (Accelerate/cblas) when compiled in
+//
+// Emits JSON consumed by scripts/compare_bench.py.
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -27,10 +37,24 @@ Stats summarize(std::vector<double> ms) {
   std::ranges::sort(ms);
   Stats s;
   s.p50 = ms[ms.size() / 2];
-  s.p95 = ms[std::min(ms.size() - 1, static_cast<size_t>(ms.size() * 0.95))];
+  s.p95 = ms[std::min(ms.size() - 1, static_cast<size_t>(static_cast<double>(ms.size()) * 0.95))];
   for (double v : ms) s.mean += v;
   s.mean /= static_cast<double>(ms.size());
   return s;
+}
+
+struct Stage {
+  std::string name;
+  std::unique_ptr<ExecContext> ctx;
+  Stats stats;
+  double max_abs_diff = 0.0;
+};
+
+std::string stats_json(const Stats& s) {
+  char buf[160];
+  std::snprintf(buf, sizeof buf, "{\"p50_ms\": %.4f, \"p95_ms\": %.4f, \"mean_ms\": %.4f}",
+                s.p50, s.p95, s.mean);
+  return buf;
 }
 
 }  // namespace
@@ -80,10 +104,23 @@ int main(int argc, char** argv) {
   for (size_t t = 0; t < horizon; ++t)
     actions.insert(actions.end(), seq[t].action.begin(), seq[t].action.end());
 
-  Arena arena(8u << 20);
+  Arena arena(16u << 20);
   ThreadPool pool(threads);
-  ExecContext ref = ExecContext::Reference();
-  ExecContext opt = ExecContext::Optimized(arena, &pool);
+
+  std::vector<Stage> stages;
+  auto add = [&](const char* name, std::unique_ptr<ExecContext> ctx) {
+    stages.push_back(Stage{name, std::move(ctx), {}, 0.0});
+  };
+  add("reference", std::make_unique<ExecContext>(ExecContext::Reference()));
+  add("v1-tiled-arena-mt", std::make_unique<ExecContext>(
+          ExecContext::Optimized(arena, &pool, OptFlags{false, false})));
+  add("+fast-tanh", std::make_unique<ExecContext>(
+          ExecContext::Optimized(arena, &pool, OptFlags{true, false})));
+  if (ExecContext::has_blas()) {
+    add("+blas-sgemm", std::make_unique<ExecContext>(
+            ExecContext::Optimized(arena, &pool, OptFlags{true, true})));
+  }
+  constexpr size_t kV1 = 1, kOptimized = 2;  // indices into `stages`
 
   auto run = [&](ExecContext& ctx, std::vector<float>* keep) {
     ctx.reset();
@@ -92,64 +129,91 @@ int main(int argc, char** argv) {
     if (keep) keep->assign(traj.data, traj.data + traj.size());
   };
 
-  std::vector<float> out_ref, out_opt;
-  run(ref, &out_ref);
-  run(opt, &out_opt);
-  double max_abs = 0.0;
-  for (size_t i = 0; i < out_ref.size(); ++i)
-    max_abs = std::max(max_abs, static_cast<double>(std::fabs(out_ref[i] - out_opt[i])));
-  if (!(max_abs < 1e-2)) {
-    std::fprintf(stderr, "reference/optimized mismatch: max |diff| = %g\n", max_abs);
-    return 1;
+  // Correctness first: every stage must agree with the reference.
+  std::vector<float> ref_out, out;
+  run(*stages[0].ctx, &ref_out);
+  for (auto& st : stages) {
+    run(*st.ctx, &out);
+    for (size_t i = 0; i < ref_out.size(); ++i)
+      st.max_abs_diff = std::max(st.max_abs_diff, static_cast<double>(std::fabs(ref_out[i] - out[i])));
+    if (!(st.max_abs_diff < 1e-2)) {
+      std::fprintf(stderr, "stage %s disagrees with reference: max |diff| = %g\n",
+                   st.name.c_str(), st.max_abs_diff);
+      return 1;
+    }
   }
 
-  auto time_mode = [&](ExecContext& ctx) {
-    for (int w = 0; w < 3; ++w) run(ctx, nullptr);  // warm-up
-    std::vector<double> ms;
-    for (size_t i = 0; i < iters; ++i) {
+  // Interleaved timing: one run of each stage per round, so frequency /
+  // thermal drift hits every stage equally.
+  std::vector<std::vector<double>> samples(stages.size());
+  for (auto& st : stages)
+    for (int w = 0; w < 3; ++w) run(*st.ctx, nullptr);
+  for (size_t it = 0; it < iters; ++it) {
+    for (size_t s = 0; s < stages.size(); ++s) {
       const auto t0 = Clock::now();
-      run(ctx, nullptr);
-      ms.push_back(std::chrono::duration<double, std::milli>(Clock::now() - t0).count());
+      run(*stages[s].ctx, nullptr);
+      samples[s].push_back(std::chrono::duration<double, std::milli>(Clock::now() - t0).count());
     }
-    return summarize(ms);
-  };
+  }
+  for (size_t s = 0; s < stages.size(); ++s) stages[s].stats = summarize(samples[s]);
 
-  // Interleave so thermal/frequency drift hits both modes equally.
-  const Stats s_ref = time_mode(ref);
-  const Stats s_opt = time_mode(opt);
-  const double reduction = 100.0 * (1.0 - s_opt.p50 / s_ref.p50);
+  const Stats& ref = stages[0].stats;
+  const Stats& v1 = stages[kV1].stats;
+  const Stats& opt = stages[kOptimized].stats;
 
-  char buf[1024];
+  std::fprintf(stderr, "\n%-20s %10s %10s %14s %14s\n", "stage", "p50 ms", "p95 ms",
+               "vs reference", "vs v1");
+  for (const auto& st : stages) {
+    std::fprintf(stderr, "%-20s %10.2f %10.2f %13.1f%% %13.1f%%\n", st.name.c_str(), st.stats.p50,
+                 st.stats.p95, 100.0 * (1.0 - st.stats.p50 / ref.p50),
+                 100.0 * (1.0 - st.stats.p50 / v1.p50));
+  }
+  std::fprintf(stderr, "(threads=%u batch=%zu horizon=%zu d_model=%zu iters=%zu)\n", pool.size(),
+               batch, horizon, d_model, iters);
+
+  std::string json;
+  char buf[512];
   std::snprintf(buf, sizeof buf,
-                "{\n"
-                "  \"config\": {\"batch\": %zu, \"horizon\": %zu, \"d_model\": %zu, "
-                "\"iters\": %zu, \"threads\": %u},\n"
-                "  \"reference\": {\"p50_ms\": %.4f, \"p95_ms\": %.4f, \"mean_ms\": %.4f},\n"
-                "  \"optimized\": {\"p50_ms\": %.4f, \"p95_ms\": %.4f, \"mean_ms\": %.4f},\n"
-                "  \"speedup\": %.3f,\n"
-                "  \"latency_reduction_pct\": %.2f,\n"
-                "  \"max_abs_diff\": %.3g\n"
-                "}\n",
-                batch, horizon, d_model, iters, pool.size(), s_ref.p50, s_ref.p95, s_ref.mean,
-                s_opt.p50, s_opt.p95, s_opt.mean, s_ref.p50 / s_opt.p50, reduction, max_abs);
-  std::fputs(buf, stdout);
+                "{\n  \"config\": {\"batch\": %zu, \"horizon\": %zu, \"d_model\": %zu, "
+                "\"iters\": %zu, \"threads\": %u, \"blas\": %s},\n",
+                batch, horizon, d_model, iters, pool.size(),
+                ExecContext::has_blas() ? "true" : "false");
+  json += buf;
+  json += "  \"reference\": " + stats_json(ref) + ",\n";
+  json += "  \"v1\": " + stats_json(v1) + ",\n";
+  json += "  \"optimized\": " + stats_json(opt) + ",\n";
+  std::snprintf(buf, sizeof buf,
+                "  \"speedup\": %.3f,\n  \"latency_reduction_pct\": %.2f,\n"
+                "  \"reduction_vs_v1_pct\": %.2f,\n  \"max_abs_diff\": %.3g,\n",
+                ref.p50 / opt.p50, 100.0 * (1.0 - opt.p50 / ref.p50),
+                100.0 * (1.0 - opt.p50 / v1.p50), stages[kOptimized].max_abs_diff);
+  json += buf;
+  json += "  \"stages\": [\n";
+  for (size_t s = 0; s < stages.size(); ++s) {
+    std::snprintf(buf, sizeof buf, "    {\"name\": \"%s\", \"p50_ms\": %.4f, \"p95_ms\": %.4f, "
+                  "\"max_abs_diff\": %.3g}%s\n", stages[s].name.c_str(), stages[s].stats.p50,
+                  stages[s].stats.p95, stages[s].max_abs_diff, s + 1 < stages.size() ? "," : "");
+    json += buf;
+  }
+  json += "  ]\n}\n";
+  std::fputs(json.c_str(), stdout);
   if (!out_path.empty()) {
     FILE* f = std::fopen(out_path.c_str(), "w");
     if (!f) {
       std::perror("fopen");
       return 1;
     }
-    std::fputs(buf, f);
+    std::fputs(json.c_str(), f);
     std::fclose(f);
   }
 
-  if (profile) {  // per-scope breakdown of the optimized path, on stderr
+  if (profile) {  // per-scope breakdown of the portable optimised path, on stderr
     Profiler::instance().reset();
     Profiler::instance().set_enabled(true);
-    for (size_t i = 0; i < std::min<size_t>(iters, 10); ++i) run(opt, nullptr);
+    for (size_t i = 0; i < std::min<size_t>(iters, 10); ++i) run(*stages[kOptimized].ctx, nullptr);
     Profiler::instance().set_enabled(false);
-    std::fprintf(stderr, "\nOptimized path, per-scope wall time on the dispatching thread:\n%s",
-                 Profiler::instance().report().c_str());
+    std::fprintf(stderr, "\n%s path, per-scope wall time on the dispatching thread:\n%s",
+                 stages[kOptimized].name.c_str(), Profiler::instance().report().c_str());
   }
   return 0;
 }

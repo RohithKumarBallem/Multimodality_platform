@@ -16,33 +16,6 @@ void fill_normal(Buffer& b, Rng& rng, float scale) {
   for (float& v : b.vec()) v = rng.normal() * scale;
 }
 
-// Pools [n * group, d] -> [n, d] by mean, then applies tanh.
-void mean_pool_tanh(const Matrix& x, size_t group, Matrix& out, const ExecContext& ctx) {
-  const size_t n = out.rows, d = out.cols;
-  const float inv = 1.0f / static_cast<float>(group);
-  ctx.parallel_for(n, 8, [&](size_t lo, size_t hi) {
-    for (size_t i = lo; i < hi; ++i) {
-      float* o = out.row(i);
-      std::memset(o, 0, d * sizeof(float));
-      for (size_t g = 0; g < group; ++g) {
-        const float* r = x.row(i * group + g);
-        for (size_t j = 0; j < d; ++j) o[j] += r[j];
-      }
-      for (size_t j = 0; j < d; ++j) o[j] = std::tanh(o[j] * inv);
-    }
-  });
-}
-
-void add_bias_tanh(Matrix& x, const Buffer& bias, const ExecContext& ctx) {
-  const float* b = bias.vec().data();
-  ctx.parallel_for(x.rows, 64, [&](size_t lo, size_t hi) {
-    for (size_t i = lo; i < hi; ++i) {
-      float* r = x.row(i);
-      for (size_t j = 0; j < x.cols; ++j) r[j] = std::tanh(r[j] + b[j]);
-    }
-  });
-}
-
 }  // namespace
 
 WorldModel::WorldModel(const ModelConfig& cfg)
@@ -102,7 +75,7 @@ Matrix WorldModel::encode(const Batch& b, ExecContext& ctx) const {
           const float* r = text_embed_.view().row(static_cast<size_t>(tok));
           for (size_t j = 0; j < d; ++j) o[j] += r[j];
         }
-        for (size_t j = 0; j < d; ++j) o[j] = std::tanh(o[j] * inv);
+        for (size_t j = 0; j < d; ++j) o[j] = ctx.tanh(o[j] * inv);
       }
     });
   }
@@ -111,24 +84,18 @@ Matrix WorldModel::encode(const Batch& b, ExecContext& ctx) const {
     MMWM_PROFILE("encode.image");
     const size_t P = cfg_.image_patches;
     Matrix x{const_cast<float*>(b.image.data()), n * P, cfg_.patch_dim};
-    Matrix h = ctx.alloc(n * P, d);
     Matrix w = w_img_.view();
-    ctx.matmul(x, w, h);
-    add_bias_tanh(h, b_img_, ctx);
     e_img = ctx.alloc(n, d);
-    mean_pool_tanh(h, P, e_img, ctx);
+    ctx.project_pool_tanh(x, w, b_img_.vec().data(), P, e_img);
   }
 
   if (has_aud) {
     MMWM_PROFILE("encode.audio");
     const size_t F = cfg_.audio_frames;
     Matrix x{const_cast<float*>(b.audio.data()), n * F, cfg_.audio_dim};
-    Matrix h = ctx.alloc(n * F, d);
     Matrix w = w_aud_.view();
-    ctx.matmul(x, w, h);
-    add_bias_tanh(h, b_aud_, ctx);
     e_aud = ctx.alloc(n, d);
-    mean_pool_tanh(h, F, e_aud, ctx);
+    ctx.project_pool_tanh(x, w, b_aud_.vec().data(), F, e_aud);
   }
 
   // Gated fusion: softmax over present modalities of <e_m, gate>/sqrt(d),
@@ -197,7 +164,7 @@ Matrix WorldModel::step(const Matrix& z, const float* action, ExecContext& ctx) 
       const float* ur = u.row(i);
       const float* zr = z.row(i);
       float* o = out.row(i);
-      for (size_t j = 0; j < d; ++j) o[j] = zr[j] + std::tanh(ur[j] + bias[j]);
+      for (size_t j = 0; j < d; ++j) o[j] = zr[j] + ctx.tanh(ur[j] + bias[j]);
     }
   });
   return out;

@@ -29,10 +29,11 @@ struct Runtime {
   std::unique_ptr<ThreadPool> pool;
   ExecContext ctx;
 
-  Runtime(ExecMode mode, unsigned threads)
+  Runtime(ExecMode mode, unsigned threads, bool use_blas = false)
       : pool(mode == ExecMode::kOptimized ? std::make_unique<ThreadPool>(threads) : nullptr),
-        ctx(mode == ExecMode::kOptimized ? ExecContext::Optimized(arena, pool.get())
-                                         : ExecContext::Reference()) {}
+        ctx(mode == ExecMode::kOptimized
+                ? ExecContext::Optimized(arena, pool.get(), OptFlags{true, use_blas})
+                : ExecContext::Reference()) {}
 };
 
 }  // namespace
@@ -42,7 +43,7 @@ TrainResult train_shard(WorldModel& model, const TrainOptions& opt) {
   const size_t d = cfg.d_model, A = cfg.action_dim, B = opt.batch_size;
   SyntheticWorld world(cfg);
   Rng rng(Rng::mix(Rng::mix(cfg.seed, 0x5452414EULL /* "TRAN" */ + opt.round), opt.shard_index));
-  Runtime rt(opt.mode, opt.threads);
+  Runtime rt(opt.mode, opt.threads, opt.use_blas);
   ExecContext& ctx = rt.ctx;
 
   const size_t window = std::max<size_t>(1, opt.steps / 10);
